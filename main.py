@@ -194,30 +194,36 @@ import torch
 import torch.nn as nn
 import random
 import torch.nn.functional as F
+
 import jieba
+
 from collections import Counter
+
+import time
+from datetime import datetime
 
 # 1. 读取训练文本，保留换行
 
 
-with open("train.txt", "r", encoding="utf-8") as f:
+with open("train_en.txt", "r", encoding="utf-8") as f:
     text = f.read().lower()
 
 tokens = list(jieba.cut(text))
 
 print("词数：", len(tokens))
-print("示例：", tokens[:30])
+# print("示例：", tokens[:30])
 
 # 打印信息
 print(f"训练文本总长度（字符数）：{len(text)}")
 print(f"训练文本总行数：{len(text.splitlines())}")
 vocab = sorted(list(set(text)))
-print(f"训练文本独立字符数（vocab size）：{len(vocab)}")
+print(f"训练文本独立字符数(vocab size)：{len(vocab)}")
 
 
 
 word_counts = Counter(tokens)
-vocab = ["<UNK>"] + sorted(set(tokens))
+min_freq = 2
+vocab = ["<UNK>"] + [w for w, c in word_counts.items() if c >= min_freq]
 stoi = {w: i for i, w in enumerate(vocab)}
 data = torch.tensor(
     [stoi.get(w, stoi["<UNK>"]) for w in tokens],
@@ -228,13 +234,11 @@ itos = {i: w for w, i in stoi.items()}
 vocab_size = len(vocab)
 print("词表大小:", vocab_size)
 
-
 # 2. 转成 ID
-data = torch.tensor([stoi[w] for w in tokens], dtype=torch.long)
-
+data = torch.tensor([stoi.get(w, stoi["<UNK>"]) for w in tokens], dtype=torch.long)
 
 # 3. 构造 (当前字 → 下一个字) 训练对
-context_size = 10
+context_size = 20
 
 x, y = [], []
 for i in range(len(data) - context_size):
@@ -252,52 +256,75 @@ class WordLSTM(nn.Module):
         self.lstm = nn.LSTM(embed_dim, hidden_dim, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
-    def forward(self, x):
-        x = self.embed(x)              # (batch, seq, embed)
-        out, _ = self.lstm(x)          # (batch, seq, hidden)
-        out = out[:, -1, :]            # 取最后一个时间步
+    def forward(self, x, hidden=None):
+        x = self.embed(x)                  # (batch, seq, embed)
+        out, hidden = self.lstm(x, hidden) # 接收并返回 hidden
+        out = out[:, -1, :]
         logits = self.fc(out)
-        return logits
+        return logits, hidden
 
 model = WordLSTM(vocab_size)
 loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
 
 # 5. 训练
-for epoch in range(450):
-    logits = model(x)
+for epoch in range(30):
+    logits, _ = model(x)
     loss = loss_fn(logits, y)
-
 
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
     if epoch % 5 == 0:
-        print(f"epoch {epoch}, loss {loss.item():.4f}")
+        print(f"epoch {epoch}, loss {loss.item():.4f}, [{datetime.now().strftime('%H:%M:%S')}]")
+
+checkpoint = {
+    "model_state": model.state_dict(),
+    "stoi": stoi,
+    "itos": itos,
+    "vocab_size": vocab_size,
+    "context_size": context_size,
+    "embed_dim": 128,
+    "hidden_dim": 256,
+}
+
+torch.save(checkpoint, "crystallm_wordlstm.pt")
+print("✅ 模型已保存")
+
 
 
 # 6. 生成文本
-def generate(start_text, length=400, temperature=1.0):
+def generate(start_text, length=100, temperature=1.0):
     model.eval()
-    result = list(start_text)
+
+    # 1. 起始文本 → 词
+    start_tokens = list(jieba.cut(start_text))
+    result = start_tokens.copy()
+
     hidden = None
 
-    for ch in start_text[:-1]:
-        idx = torch.tensor([[stoi[ch]]])
+    # 2. 先把起始词喂进模型，建立 hidden state
+    for w in start_tokens[:-1]:
+        idx = torch.tensor([[stoi.get(w, stoi["<UNK>"])]])
         _, hidden = model(idx, hidden)
 
-    cur_char = start_text[-1]
+    cur_word = start_tokens[-1]
 
+    # 3. 正式生成
     for _ in range(length):
-        idx = torch.tensor([[stoi[cur_char]]])
+        idx = torch.tensor([[stoi.get(cur_word, stoi["<UNK>"])]])
         logits, hidden = model(idx, hidden)
+
         probs = torch.softmax(logits / temperature, dim=-1)
         next_idx = torch.multinomial(probs, 1).item()
-        cur_char = itos[next_idx]
-        result.append(cur_char)
 
+        cur_word = itos[next_idx]
+        result.append(cur_word)
+
+    # 4. 词 → 文本
     return "".join(result)
+
 
 
 print(generate("你", temperature=1.0))
