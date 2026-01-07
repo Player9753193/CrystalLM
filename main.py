@@ -205,7 +205,7 @@ from datetime import datetime
 # 1. 读取训练文本，保留换行
 
 
-with open("train_en.txt", "r", encoding="utf-8") as f:
+with open("train.txt", "r", encoding="utf-8") as f:
     text = f.read().lower()
 
 tokens = list(jieba.cut(text))
@@ -238,15 +238,41 @@ print("词表大小:", vocab_size)
 data = torch.tensor([stoi.get(w, stoi["<UNK>"]) for w in tokens], dtype=torch.long)
 
 # 3. 构造 (当前字 → 下一个字) 训练对
+# context_size = 20
+
+# x, y = [], []
+# for i in range(len(data) - context_size):
+#     x.append(data[i:i+context_size])
+#     y.append(data[i+context_size])
+
+# x = torch.stack(x)
+# y = torch.tensor(y)
+
+# 3. 使用 Dataset + DataLoader（省内存）
 context_size = 20
 
-x, y = [], []
-for i in range(len(data) - context_size):
-    x.append(data[i:i+context_size])
-    y.append(data[i+context_size])
+class WordDataset(torch.utils.data.Dataset):
+    def __init__(self, data, context_size):
+        self.data = data
+        self.context_size = context_size
 
-x = torch.stack(x)
-y = torch.tensor(y)
+    def __len__(self):
+        return len(self.data) - self.context_size
+
+    def __getitem__(self, idx):
+        x = self.data[idx : idx + self.context_size]
+        y = self.data[idx + self.context_size]
+        return x, y
+
+dataset = WordDataset(data, context_size)
+
+loader = torch.utils.data.DataLoader(
+    dataset,
+    batch_size=64,
+    shuffle=True,
+    drop_last=True
+)
+
 
 # 4. 定义模型
 class WordLSTM(nn.Module):
@@ -268,16 +294,36 @@ loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
 
 # 5. 训练
-for epoch in range(30):
-    logits, _ = model(x)
-    loss = loss_fn(logits, y)
+# for epoch in range(30):
+#     logits, _ = model(x)
+#     loss = loss_fn(logits, y)
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+#     optimizer.zero_grad()
+#     loss.backward()
+#     optimizer.step()
 
-    if epoch % 5 == 0:
-        print(f"epoch {epoch}, loss {loss.item():.4f}, [{datetime.now().strftime('%H:%M:%S')}]")
+#     if epoch % 5 == 0:
+#         print(f"epoch {epoch}, loss {loss.item():.4f}, [{datetime.now().strftime('%H:%M:%S')}]")
+
+for epoch in range(5):
+    model.train()
+    total_loss = 0.0
+
+    for xb, yb in loader:
+        logits, _ = model(xb)
+        loss = loss_fn(logits, yb)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    if epoch % 1 == 0:
+        print(
+            f"epoch {epoch}, loss {total_loss / len(loader):.4f}, "
+            f"[{datetime.now().strftime('%H:%M:%S')}]"
+        )
 
 checkpoint = {
     "model_state": model.state_dict(),
