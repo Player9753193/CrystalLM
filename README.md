@@ -1,7 +1,7 @@
 # English
 
 # CrystalLM ✨  
-A Chinese Word-level Language Model Implemented from Scratch 
+A Chinese Word-level Language Model Implemented from Scratch (Word-level LSTM)
 
 CrystalLM is an **educational and experimental** Chinese language modeling project.  
 Starting from the most fundamental text processing, it progressively implements:
@@ -9,7 +9,6 @@ Starting from the most fundamental text processing, it progressively implements:
 - Chinese word segmentation (jieba)
 - Vocabulary construction and pruning (<UNK> mechanism)
 - Word-level LSTM language model
-- Word-level GRU language model
 - Text generation (temperature sampling)
 - Model saving and loading (can be directly reused for generation)
 

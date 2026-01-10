@@ -30,7 +30,7 @@ vocab = sorted(list(set(text)))
 print(f"训练文本独立字符数(vocab size)：{len(vocab)}")
 
 word_counts = Counter(tokens)
-min_freq = 1
+min_freq = 3
 SPECIAL_TOKENS = ["<PAD>", "<START>", "<END>", "<UNK>"]
 vocab = SPECIAL_TOKENS + [w for w, c in word_counts.items() if c >= min_freq]
 stoi = {w: i for i, w in enumerate(vocab)}
@@ -66,12 +66,13 @@ dataset = WordDataset(data, context_size)
 
 loader = torch.utils.data.DataLoader(
     dataset,
-    batch_size=64,
+    batch_size=128,          # ← 直接翻倍
     shuffle=True,
     drop_last=True,
-    num_workers=3,        # ← 加这一行
-    pin_memory=True       # ← 顺手加，免费加速
+    # num_workers=2,           # ← 不要 3，Mac 上 2 最稳
+    # pin_memory=True
 )
+
 
 
 # 4. 定义模型
@@ -79,13 +80,20 @@ class WordGRU(nn.Module):
     def __init__(self, vocab_size, embed_dim=128, hidden_dim=256):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
-        self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
+        self.gru = nn.GRU(
+            embed_dim,
+            hidden_dim,
+            num_layers=2,
+            batch_first=True
+        )
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x, hidden=None):
         x = self.embed(x)                  # (batch, seq, embed)
-        out, hidden = self.gru(x, hidden)  # GRU 只有一个 hidden
-        out = out[:, -1, :]                # 取最后一个时间步
+        out, hidden = self.gru(x, hidden)
+        out = hidden[-1]     # ← 只取最后一层最后一步
+
+
         logits = self.fc(out)
         return logits, hidden
 
@@ -94,7 +102,7 @@ loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # 5. 训练
-for epoch in range(5):
+for epoch in range(10):
     model.train()
     total_loss = 0.0
 
@@ -104,6 +112,7 @@ for epoch in range(5):
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
         total_loss += loss.item()

@@ -7,13 +7,20 @@ class WordGRU(nn.Module):
     def __init__(self, vocab_size, embed_dim=128, hidden_dim=256):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
-        self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
+        self.gru = nn.GRU(
+            embed_dim,
+            hidden_dim,
+            num_layers=2,
+            batch_first=True
+        )
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x, hidden=None):
         x = self.embed(x)                  # (batch, seq, embed)
-        out, hidden = self.gru(x, hidden)  # GRU 只有一个 hidden
-        out = out[:, -1, :]                # 取最后一个时间步
+        out, hidden = self.gru(x, hidden)
+        out = hidden[-1]     # ← 只取最后一层最后一步
+
+
         logits = self.fc(out)
         return logits, hidden
 
@@ -35,7 +42,7 @@ model.eval()
 
 print("✅ 模型加载完成")
 
-def generate(start_text, length=100, temperature=1.0):
+def generate(start_text, length=256, temperature=0.7):
     model.eval()
 
     # 1. 起始文本 → 词
@@ -69,11 +76,11 @@ def generate(start_text, length=100, temperature=1.0):
     return "".join(result)
 
 # print(generate("minecraft", temperature=1.0))
-print(generate("人生", temperature=1.0))
+# print(generate("人生", temperature=1.0))
 # print(generate("科学", temperature=1.0))
 # print(generate("未来", temperature=1.0))
 # print(generate("技术", temperature=0.8))
 # print(generate("文明", temperature=0.8))
 # print(generate("宇宙", temperature=0.8))
-# print(generate("时间", temperature=0.8))
+print(generate("时间"))
 # print(generate("生命", temperature=0.8))
