@@ -7,10 +7,6 @@ from collections import Counter
 import time
 from datetime import datetime
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", device)
-
-
 # 1. 读取训练文本，保留换行
 with open("train.txt", "r", encoding="utf-8") as f:
     text = f.read().lower()
@@ -38,11 +34,6 @@ COMMON_TOKENS = [
     "ctrl", "shift", "alt", "cmd",
     "+", "-", "*", "/", "=", "==",
     "(", ")", "[", "]", "{", "}",
-    "（", "）", "【", "】", "「", "」",
-    "《", "》", "<", ">", "?", "!",
-    "@", "#", "$", "%", "^", "&",
-    "*", "_", "¥", "、", "“", "”",
-    "≠", "±", "：", "；", "‘", "’"
 ]
 
 word_counts = Counter(tokens)
@@ -115,11 +106,11 @@ class WordGRU(nn.Module):
     def forward(self, x, hidden=None):
         x = self.embed(x)                  # (batch, seq, embed)
         out, hidden = self.gru(x, hidden)
-        out = hidden[-1, :]     # ← 实际是「最后一层的 hidden」，不是“最后一步”
+        out = hidden[-1, :]     # ← 只取最后一层最后一步
         logits = self.fc(out)
         return logits, hidden
 
-model = WordGRU(vocab_size).to(device)
+model = WordGRU(vocab_size)
 loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -129,9 +120,6 @@ for epoch in range(10):
     total_loss = 0.0
 
     for xb, yb in loader:
-        xb = xb.to(device, non_blocking=True)
-        yb = yb.to(device, non_blocking=True)
-
         hidden = None
         logits, _ = model(xb)
         loss = loss_fn(logits, yb)
@@ -181,8 +169,9 @@ def generate(start_text, length=1000, temperature=1.0):
 
     # 3. 正式生成
     for _ in range(length):
-        idx = torch.tensor([[stoi.get(w, stoi["<UNK>"])]],device=device)
+        idx = torch.tensor([[stoi.get(cur_word, stoi["<UNK>"])]])
         logits, hidden = model(idx, hidden)
+
         probs = torch.softmax(logits / temperature, dim=-1)
         next_idx = torch.multinomial(probs, 1).item()
 

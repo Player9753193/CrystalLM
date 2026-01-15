@@ -1,16 +1,19 @@
 import torch
 import torch.nn as nn
 import jieba
+from config import embed_dim
+from config import hidden_dim
+from config import layers
 
 # ===== 模型定义（必须和训练时一模一样）=====
 class WordGRU(nn.Module):
-    def __init__(self, vocab_size, embed_dim=128, hidden_dim=256):
+    def __init__(self, vocab_size, embed_dim=embed_dim, hidden_dim=hidden_dim):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
         self.gru = nn.GRU(
             embed_dim,
             hidden_dim,
-            num_layers=2,
+            num_layers=layers,
             batch_first=True
         )
         self.fc = nn.Linear(hidden_dim, vocab_size)
@@ -42,7 +45,7 @@ model.eval()
 
 print("✅ 模型加载完成")
 
-def generate(start_text, length=256, temperature=0.7):
+def generate(start_text, length, temperature):
     model.eval()
 
     # 1. 起始文本 → 词
@@ -82,5 +85,5 @@ def generate(start_text, length=256, temperature=0.7):
 # print(generate("技术", temperature=0.8))
 # print(generate("文明", temperature=0.8))
 # print(generate("宇宙", temperature=0.8))
-print(generate("时间"))
+print(generate("时间", 100, 0.8))
 # print(generate("生命", temperature=0.8))

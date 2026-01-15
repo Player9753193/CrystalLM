@@ -19,7 +19,7 @@ class WordLSTM(nn.Module):
 
 
 # ===== 加载 checkpoint =====
-ckpt = torch.load("crystallm_wordlstm.pt", map_location="cpu")
+ckpt = torch.load("crystallm_wordlstm202601072045.pt", map_location="cpu")
 
 stoi = ckpt["stoi"]
 itos = ckpt["itos"]
