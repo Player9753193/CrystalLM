@@ -7,13 +7,18 @@ from config import layers
 
 # ===== 模型定义（必须和训练时一模一样）=====
 class WordGRU(nn.Module):
-    def __init__(self, vocab_size, embed_dim=embed_dim, hidden_dim=hidden_dim):
+    def __init__(self, vocab_size, embed_dim=128, hidden_dim=256):
         super().__init__()
-        self.embed = nn.Embedding(vocab_size, embed_dim)
+        self.embed = nn.Embedding(
+            vocab_size,
+            embed_dim,
+            padding_idx=stoi["<PAD>"]
+        )
         self.gru = nn.GRU(
             embed_dim,
             hidden_dim,
-            num_layers=layers,
+            num_layers=3,
+            dropout=0.2,
             batch_first=True
         )
         self.fc = nn.Linear(hidden_dim, vocab_size)
@@ -21,9 +26,7 @@ class WordGRU(nn.Module):
     def forward(self, x, hidden=None):
         x = self.embed(x)                  # (batch, seq, embed)
         out, hidden = self.gru(x, hidden)
-        out = hidden[-1]     # ← 只取最后一层最后一步
-
-
+        out = hidden[-1, :]     # ← 实际是「最后一层的 hidden」，不是“最后一步”
         logits = self.fc(out)
         return logits, hidden
 
@@ -85,5 +88,5 @@ def generate(start_text, length, temperature):
 # print(generate("技术", temperature=0.8))
 # print(generate("文明", temperature=0.8))
 # print(generate("宇宙", temperature=0.8))
-print(generate("时间", 100, 0.8))
+print(generate("你", 1000, 1.2))
 # print(generate("生命", temperature=0.8))

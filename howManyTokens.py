@@ -46,7 +46,7 @@ COMMON_TOKENS = [
 ]
 
 word_counts = Counter(tokens)
-min_freq = 2
+min_freq = 3
 SPECIAL_TOKENS = ["<PAD>", "<END>", "<UNK>"]
 
 vocab = SPECIAL_TOKENS + COMMON_TOKENS + [
@@ -62,4 +62,3 @@ data = torch.tensor(
 
 itos = {i: w for w, i in stoi.items()}
 vocab_size = len(vocab)
-print("词表大小:", vocab_size)

@@ -3,9 +3,33 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from config import *  # <-- 导入统一参数
+import time
 
-from datetime import datetime
+import generate_GPT as generate
+
+# ======================
+# 配置区
+# ======================
+TEXT_PATH = "train.txt"
+SAVE_PATH = "crystallm_gpt_lowmem.pt"
+
+CONTEXT_SIZE = 256
+BATCH_SIZE = 16          # 小 batch 保持低内存
+GRAD_ACCUM = 4           # 累积 4 个 batch，相当于 batch=64
+EPOCHS = 10
+LR = 3e-4
+
+EMBED_DIM = 256          # 低内存版，减半
+LAYERS = 4               # 低内存版
+HEADS = 4
+FF_DIM = 1024
+DROPOUT = 0.1
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+BOS = "<|bos|>"
+EOS = "<|eos|>"
+PAD = "<|pad|>"
 
 # ======================
 # 读取文本 & tokenizer
@@ -14,7 +38,7 @@ print("📖 Loading text...")
 text = Path(TEXT_PATH).read_text(encoding="utf-8")
 
 chars = sorted(list(set(text)))
-specials = [PAD, BOS, EOS, SYS, USR, BOT]
+specials = [PAD, BOS, EOS]
 
 itos = specials + chars
 stoi = {s: i for i, s in enumerate(itos)}
@@ -39,21 +63,15 @@ class LMDataset(Dataset):
     def __getitem__(self, idx):
         x = data[idx : idx + CONTEXT_SIZE]
         y = data[idx + 1 : idx + CONTEXT_SIZE + 1]
+        return x, y
 
-        bot_id = stoi[BOT]
-        mask = torch.zeros_like(y, dtype=torch.float)
-        in_bot = False
-        for i, token in enumerate(x):
-            if token.item() == bot_id:
-                in_bot = True
-            if in_bot:
-                mask[i] = 1.0
-        # 如果整条序列都没有 <|bot|>，退化为全 1
-        if mask.sum() == 0:
-            mask[:] = 1.0
-        return x, y, mask
-
-loader = DataLoader(LMDataset(), batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
+loader = DataLoader(
+    LMDataset(),
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=0,      # 避免额外内存
+    pin_memory=False
+)
 
 # ======================
 # GPT 模型
@@ -62,7 +80,9 @@ class GPTBlock(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.ln1 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, HEADS, dropout=DROPOUT, batch_first=True)
+        self.attn = nn.MultiheadAttention(
+            dim, HEADS, dropout=DROPOUT, batch_first=True
+        )
         self.ln2 = nn.LayerNorm(dim)
         self.ff = nn.Sequential(
             nn.Linear(dim, FF_DIM),
@@ -78,6 +98,7 @@ class GPTBlock(nn.Module):
         x = x + self.ff(self.ln2(x))
         return x
 
+
 class GPT(nn.Module):
     def __init__(self):
         super().__init__()
@@ -92,10 +113,17 @@ class GPT(nn.Module):
         B, T = x.shape
         pos = torch.arange(T, device=x.device)
         x = self.token(x) + self.pos(pos)
-        mask = torch.triu(torch.ones(T, T, device=x.device) * float("-inf"), diagonal=1)
+
+        mask = torch.triu(
+            torch.ones(T, T, device=x.device) * float("-inf"),
+            diagonal=1
+        )
+
         for blk in self.blocks:
             x = blk(x, mask)
-        return self.head(self.ln_f(x))
+
+        x = self.ln_f(x)
+        return self.head(x)
 
 model = GPT().to(DEVICE)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
@@ -103,26 +131,55 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 # ======================
 # 训练
 # ======================
+scaler = torch.cuda.amp.GradScaler()  # 混合精度训练，降低显存
+
 print("🚀 Training...")
 for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
-    for x, y, mask in loader:
-        x, y, mask = x.to(DEVICE), y.to(DEVICE), mask.to(DEVICE)
-        logits = model(x)
-        # cross entropy with mask
-        loss = F.cross_entropy(logits.view(-1, vocab_size), y.view(-1), reduction="none")
-        loss = (loss * mask.view(-1)).sum() / mask.sum().clamp(min=1)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    start_time = time.time()
+    optimizer.zero_grad()
+
+    for step, (x, y) in enumerate(loader):
+        x = x.to(DEVICE)
+        y = y.to(DEVICE)
+
+        with torch.cuda.amp.autocast():
+            logits = model(x)
+            loss = F.cross_entropy(logits.view(-1, vocab_size), y.view(-1))
+
+        scaler.scale(loss / GRAD_ACCUM).backward()
+
+        if (step + 1) % GRAD_ACCUM == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+
         total_loss += loss.item()
-    print(f"Epoch {epoch+1}/{EPOCHS} | loss {total_loss/len(loader):.4f}"
-          f"[{datetime.now().strftime('%H:%M:%S')}]"
-    )
+
+        if (step + 1) % 50 == 0:
+            print(f"[{time.strftime('%H:%M:%S')}] step {step+1}, loss {loss.item():.4f}")
+
+    epoch_time = time.time() - start_time
+    print(f"Epoch {epoch+1}/{EPOCHS} | avg loss {total_loss/len(loader):.4f} | time {epoch_time:.1f}s")
 
 # ======================
 # 保存
 # ======================
-torch.save({"model": model.state_dict(), "stoi": stoi, "itos": itos, "context": CONTEXT_SIZE}, SAVE_PATH)
+torch.save(
+    {
+        "model": model.state_dict(),
+        "stoi": stoi,
+        "itos": itos,
+        "context": CONTEXT_SIZE
+    },
+    SAVE_PATH
+)
+
 print("✅ Saved to", SAVE_PATH)
+
+
+# ======================
+# 加载模型
+# ======================
+print(generate.DEVICE("你", 100))

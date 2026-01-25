@@ -12,7 +12,7 @@ print("Using device:", device)
 
 
 # 1. 读取训练文本，保留换行
-with open("train_cn_small.txt", "r", encoding="utf-8") as f:
+with open("train.txt", "r", encoding="utf-8") as f:
     text = f.read().lower()
 
 tokens = []
@@ -21,7 +21,8 @@ for line in text.splitlines():
     if not line:
         continue
     tokens.extend(jieba.cut(line))
-    tokens.append("<END>")
+    #tokens.append("<END>")
+    tokens.append("\n")
 
 
 print("词数：", len(tokens))
@@ -68,7 +69,7 @@ print("词表大小:", vocab_size)
 data = torch.tensor([stoi.get(w, stoi["<UNK>"]) for w in tokens], dtype=torch.long)
 
 # 3. 使用 Dataset + DataLoader（省内存）
-context_size = 32
+context_size = 64
 
 class WordDataset(torch.utils.data.Dataset):
     def __init__(self, data, context_size):
@@ -87,7 +88,7 @@ dataset = WordDataset(data, context_size)
 
 loader = torch.utils.data.DataLoader(
     dataset,
-    batch_size=32,          # ← 直接翻倍
+    batch_size=128,          # ← 直接翻倍
     shuffle=True,
     drop_last=True,
     # num_workers=2,           # ← 不要 3，Mac 上 2 最稳
@@ -95,36 +96,52 @@ loader = torch.utils.data.DataLoader(
 )
 
 # 4. 定义模型
-class WordGRU(nn.Module):
-    def __init__(self, vocab_size, embed_dim=128, hidden_dim=256):
+# 4. 定义 Transformer 模型
+class WordTransformer(nn.Module):
+    def __init__(self, vocab_size, 
+                 embed_dim=128, 
+                 num_heads=6, 
+                 num_layers=4, 
+                 ff_hidden=512, 
+                 max_len=512, 
+                 dropout=0.2):
         super().__init__()
-        self.embed = nn.Embedding(
-            vocab_size,
-            embed_dim,
-            padding_idx=stoi["<PAD>"]
-        )
-        self.gru = nn.GRU(
-            embed_dim,
-            hidden_dim,
-            num_layers=3,
-            dropout=0.2,
-            batch_first=True
-        )
-        self.fc = nn.Linear(hidden_dim, vocab_size)
+        self.embed_dim = embed_dim
+        self.token_embed = nn.Embedding(vocab_size, embed_dim, padding_idx=stoi["<PAD>"])
+        self.pos_embed = nn.Embedding(max_len, embed_dim)
 
-    def forward(self, x, hidden=None):
-        x = self.embed(x)                  # (batch, seq, embed)
-        out, hidden = self.gru(x, hidden)
-        out = hidden[-1, :]     # ← 实际是「最后一层的 hidden」，不是“最后一步”
-        logits = self.fc(out)
-        return logits, hidden
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=ff_hidden,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu"
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc = nn.Linear(embed_dim, vocab_size)
 
-model = WordGRU(vocab_size).to(device)
+    def forward(self, x):
+        """
+        x: (batch, seq_len)
+        """
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+        x = self.token_embed(x) + self.pos_embed(positions)
+
+        # mask: Transformer 默认看整个序列，我们这里不需要 causal mask 因为训练时我们只预测下一词
+        out = self.transformer(x)  # (batch, seq, embed_dim)
+        # 取最后一个 token 的输出作为预测
+        logits = self.fc(out[:, -1, :])
+        return logits
+
+
+model = WordTransformer(vocab_size).to(device)
 loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # 5. 训练
-for epoch in range(10):
+for epoch in range(12):
     model.train()
     total_loss = 0.0
 
@@ -163,7 +180,7 @@ torch.save(checkpoint, "crystallm_wordgru.pt")
 print("✅ 模型已保存")
 
 # 6. 生成文本
-def generate(start_text, length=1000, temperature=1.0):
+def generate(start_text, length=300, temperature=1.0):
     model.eval()
 
     # 1. 起始文本 → 词
@@ -197,4 +214,4 @@ def generate(start_text, length=1000, temperature=1.0):
     # 4. 词 → 文本
     return "".join(result)
 
-print(generate("minecraft", temperature=1.0))
+print(generate("来", temperature=1.0))
